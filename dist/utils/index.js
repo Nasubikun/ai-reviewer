@@ -9,7 +9,7 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
     });
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.generateReviewCommentObject = exports.generateReviewCommentText = exports.dryRunPostReviewComment = exports.realPostReviewComment = void 0;
+exports.generateReviewCommentObject = exports.generateReviewCommentText = exports.dryRunPostReviewComment = exports.realPostReviewComment = exports.generateAcademicReviewText = exports.generateAcademicReviewObject = exports.createAcademicReviewPrompt = void 0;
 exports.fetchPullRequest = fetchPullRequest;
 exports.fetchPullRequestFiles = fetchPullRequestFiles;
 exports.filterFiles = filterFiles;
@@ -23,6 +23,41 @@ const rest_1 = require("@octokit/rest");
 const minimatch_1 = require("minimatch");
 const diff_1 = require("diff");
 const zod_1 = require("zod");
+// 学術論文レビュー用の関数をインポート
+var createAcademicPrompt_1 = require("./createAcademicPrompt");
+Object.defineProperty(exports, "createAcademicReviewPrompt", { enumerable: true, get: function () { return createAcademicPrompt_1.createAcademicReviewPrompt; } });
+var generateAcademicReview_1 = require("./generateAcademicReview");
+Object.defineProperty(exports, "generateAcademicReviewObject", { enumerable: true, get: function () { return generateAcademicReview_1.generateAcademicReviewObject; } });
+Object.defineProperty(exports, "generateAcademicReviewText", { enumerable: true, get: function () { return generateAcademicReview_1.generateAcademicReviewText; } });
+/**
+ * Generic retry function with exponential backoff
+ */
+function withRetry(operation, options) {
+    return __awaiter(this, void 0, void 0, function* () {
+        const { maxAttempts, initialDelayMs, backoffFactor, retryableError, onRetry } = options;
+        let lastError;
+        for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+            try {
+                return yield operation(attempt);
+            }
+            catch (error) {
+                lastError = error;
+                if (!retryableError(error)) {
+                    throw error; // Not retryable, rethrow immediately
+                }
+                if (attempt >= maxAttempts) {
+                    break; // Will throw the last error after the loop
+                }
+                const delayMs = initialDelayMs * Math.pow(backoffFactor, attempt - 1);
+                if (onRetry) {
+                    onRetry(attempt, error);
+                }
+                yield new Promise(resolve => setTimeout(resolve, delayMs));
+            }
+        }
+        throw lastError;
+    });
+}
 /**
  * GitHub の PR 情報を取得
  */
@@ -70,7 +105,7 @@ function parseFiles(files) {
  */
 function createReviewPrompt({ prTitle, prBody, diffText, language, }) {
     return `
-You're a sophisticated software engineer.
+You are an experienced professor in the School of Science and Engineering.
 Please review the code changes in the following Pull Request and point out potential problems or areas for improvement only if they are significant.
 Important rules about the diff format:
 - Lines that begin with "-" are lines that have been **removed** in this Pull Request.
@@ -78,10 +113,10 @@ Important rules about the diff format:
 - Lines that begin with a space " " are context lines, which have not changed.
 
 Review guidelines:
-- Ignore changes that only involve whitespace, indentation, or formatting that do not affect the code’s behavior.
-- Do not add any review comments for trivial or non-impactful changes (e.g., variable name changes that do not affect logic).
-- For suggestions, assign a priority (e.g., PRIORITY:HIGH, PRIORITY:MEDIUM, PRIORITY:LOW).
-- Use type=POSITIVE only for changes that bring a clear, significant improvement to readability, performance, or maintainability. If a change is merely "not a problem," do not comment on it.
+- Ignore changes that only involve whitespace, indentation, or formatting that do not affect the code's behavior.
+- Do not add any review comments for trivial or non-impactful changes (e.g., variable-name changes that do not affect logic).
+- For suggestions, assign a priority. Only the following labels are allowed: HIGH, MEDIUM, LOW, or POSITIVE.
+- Use type=POSITIVE only for changes that bring a clear, significant improvement to readability, performance, or maintainability. If a change is merely “not a problem,” do not comment on it.
 - Your review must be written in ${language}.
 
 
@@ -191,6 +226,10 @@ const generateReviewCommentText = (params) => __awaiter(void 0, void 0, void 0, 
 exports.generateReviewCommentText = generateReviewCommentText;
 const generateReviewCommentObject = (params) => __awaiter(void 0, void 0, void 0, function* () {
     const { modelCode, userPrompt } = params;
+    // read testPrompt from a file named "testPrompt.txt` in the same directory
+    // this file is comes from: https://github.com/Nasubikun/ai-reviewer/issues/1
+    // const testPromptPath = path.join(process.cwd(), 'src', 'utils', 'testPrompt.txt');
+    // const testPromptText = await fs.readFile(testPromptPath, 'utf-8');
     const commentSchema = zod_1.z.object({
         path: zod_1.z
             .string()
@@ -205,9 +244,9 @@ const generateReviewCommentObject = (params) => __awaiter(void 0, void 0, void 0
             .positive()
             .describe("The 1-based line number where the comment is placed. " +
             "This corresponds to the modified (new) line in the diff or the final file."),
-        type: zod_1.z
-            .enum(["PRIORITY:HIGH", "PRIORITY:MEDIUM", "PRIORITY:LOW", "POSITIVE"])
-            .describe("The type of this comment. For suggestions, set its priority as like 'PRIORITY:HIGH', 'PRIORITY:MEDIUM', or 'PRIORITY:LOW'. For positive comments, it should be 'POSITIVE'."),
+        priority: zod_1.z
+            .enum(["HIGH", "MEDIUM", "LOW", "POSITIVE"])
+            .describe("The priority of this fix. For suggestions, set its priority as like 'HIGH', 'MEDIUM', or 'LOW'. For positive comments, it should be 'POSITIVE'."),
     });
     const reviewSchema = zod_1.z.object({
         body: zod_1.z
@@ -215,41 +254,57 @@ const generateReviewCommentObject = (params) => __awaiter(void 0, void 0, void 0
             .describe("Represents the overall body text of the review, providing a summary or context for the accompanying line-level comments."),
         comments: zod_1.z.array(commentSchema),
     });
-    const { object } = yield (0, ai_1.generateObject)({
-        schema: reviewSchema,
-        model: (0, google_1.google)(modelCode),
-        prompt: userPrompt,
-    });
-    const iconMap = {
-        "PRIORITY:HIGH": ":rotating_light:",
-        "PRIORITY:MEDIUM": ":warning:",
-        "PRIORITY:LOW": ":information_source:",
-        "POSITIVE": ":sparkles:"
-    };
-    const priorityOrder = {
-        "PRIORITY:HIGH": 0,
-        "PRIORITY:MEDIUM": 1,
-        "PRIORITY:LOW": 2,
-        "POSITIVE": 999
-    };
-    const parseCommentType = (type) => {
-        if (type.startsWith("PRIORITY:")) {
-            return type.replace("PRIORITY:", "");
-        }
-        return type;
-    };
-    return {
-        body: object.body,
-        comments: object.comments
-            .sort((a, b) => priorityOrder[a.type] - priorityOrder[b.type])
-            .map((comment) => {
-            return Object.assign(Object.assign({}, comment), { body: `${iconMap[comment.type]} [${parseCommentType(comment.type)}] ${comment.body}`, type: undefined });
-        }),
-    };
+    try {
+        // Use the retry mechanism for handling NoObjectGeneratedError
+        const { object } = yield withRetry((...args_1) => __awaiter(void 0, [...args_1], void 0, function* (attempt = 1) {
+            return yield (0, ai_1.generateObject)({
+                schema: reviewSchema,
+                model: (0, google_1.google)(modelCode),
+                prompt: userPrompt,
+                // Use temperature 0 for first attempt, 0.5 for retries
+                temperature: attempt === 1 ? 0 : 0.5
+            });
+        }), {
+            maxAttempts: 3,
+            initialDelayMs: 2000,
+            backoffFactor: 1.5,
+            retryableError: (error) => {
+                return error instanceof ai_1.NoObjectGeneratedError;
+            },
+            onRetry: (attempt, error) => {
+                console.log(`Retry attempt ${attempt} after error: ${error.message}`);
+            }
+        });
+        const iconMap = {
+            "HIGH": ":rotating_light:",
+            "MEDIUM": ":warning:",
+            "LOW": ":information_source:",
+            "POSITIVE": ":sparkles:"
+        };
+        const priorityOrder = {
+            "HIGH": 0,
+            "MEDIUM": 1,
+            "LOW": 2,
+            "POSITIVE": 999
+        };
+        return {
+            body: object.body,
+            comments: object.comments
+                .sort((a, b) => priorityOrder[a.priority] - priorityOrder[b.priority])
+                .map((comment) => {
+                return Object.assign(Object.assign({}, comment), { body: `${iconMap[comment.priority]} [${comment.priority}] ${comment.body}`, priority: undefined });
+            }),
+        };
+    }
+    catch (error) {
+        // If object generation fails after all retries, fall back to text generation
+        console.log("Failed to generate structured review after all retries. Falling back to text generation.");
+        return yield (0, exports.generateReviewCommentText)(params);
+    }
 });
 exports.generateReviewCommentObject = generateReviewCommentObject;
 function runReviewBotVercelAI(_a) {
-    return __awaiter(this, arguments, void 0, function* ({ githubToken, owner, repo, pullNumber, excludePaths, language, modelCode, generateReviewCommentFn, postReviewCommentFn, }) {
+    return __awaiter(this, arguments, void 0, function* ({ githubToken, owner, repo, pullNumber, excludePaths, language, modelCode, generateReviewCommentFn, postReviewCommentFn, createPromptFn = createReviewPrompt, }) {
         try {
             const octokit = new rest_1.Octokit({ auth: githubToken });
             // 1. PRデータの取得
@@ -263,7 +318,7 @@ function runReviewBotVercelAI(_a) {
             // 5. 差分テキストの生成
             const diffText = createParsedDiffText(parsedFilesData);
             // 6. プロンプトの生成
-            const userPrompt = createReviewPrompt({
+            const userPrompt = createPromptFn({
                 prTitle: prData.title,
                 prBody: prData.body,
                 diffText,
@@ -271,8 +326,15 @@ function runReviewBotVercelAI(_a) {
             });
             console.log("--- Prompt ---");
             console.log(userPrompt);
-            // 7. AI にレビュー文を生成してもらう
-            const reviewCommentContent = yield generateReviewCommentFn({ modelCode, userPrompt });
+            // 7. AI にレビュー文を生成してもらう (with improved error handling)
+            let reviewCommentContent;
+            try {
+                reviewCommentContent = yield generateReviewCommentFn({ modelCode, userPrompt });
+            }
+            catch (error) {
+                console.error("Failed to generate review comment after retries:", error);
+                throw error; // Re-throw to be caught by the outer try-catch
+            }
             console.log("--- Review ---");
             console.log(reviewCommentContent);
             // 8. GitHub にレビュー文を投稿
@@ -286,6 +348,7 @@ function runReviewBotVercelAI(_a) {
         }
         catch (error) {
             console.error("Error in runReviewBotVercelAI:", error);
+            throw error;
         }
     });
 }

@@ -1,0 +1,44 @@
+name: "AI Code Review"
+
+permissions:
+  pull-requests: write
+  contents: read
+
+on:
+  pull_request:
+    paths:
+      - 'src/**/*.ts'
+      - 'src/**/*.js'
+      - '**/*.json'
+      - '**/*.yml'
+      - '**/*.yaml'
+      - '**/*.md'
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+jobs:
+  code-review:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check API Key
+        run: |
+          if [ -z "${{ secrets.GEMINI_API_KEY }}" ]; then
+            echo "❌ Error: GEMINI_API_KEY is not set in repository secrets"
+            echo "📝 Please add GEMINI_API_KEY to your repository secrets:"
+            echo "   1. Go to Settings → Secrets and variables → Actions"
+            echo "   2. Click 'New repository secret'"
+            echo "   3. Name: GEMINI_API_KEY"
+            echo "   4. Value: Your Google AI Studio API key"
+            echo "🔗 Get your API key at: https://makersuite.google.com/app/apikey"
+            exit 1
+          fi
+          echo "✅ GEMINI_API_KEY is configured"
+      
+      - name: Gemini Code Review Bot
+        uses: Nasubikun/ai-reviewer@v1
+        with:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          LANGUAGE: "English"
+          EXCLUDE_PATHS: "node_modules/**,dist/**,*.lock,*.log"
+          MODEL_CODE: "models/gemini-2.0-flash"

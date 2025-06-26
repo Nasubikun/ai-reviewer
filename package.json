@@ -1,16 +1,24 @@
 {
-  "name": "ai-reviewer",
+  "name": "ai-academic-paper-reviewer",
   "version": "1.0.0",
-  "description": "",
+  "description": "AI-powered academic paper review bot that provides educational feedback using Gemini AI",
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "build": "tsc",
     "exec": "node --require esbuild-register src/local.ts"
   },
-  "keywords": [],
-  "author": "",
+  "keywords": ["github-action", "ai", "academic", "paper", "review", "gemini", "education", "typescript"],
+  "author": "toshi0806",
   "license": "ISC",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/toshi0806/ai-academic-paper-reviewer.git"
+  },
+  "bugs": {
+    "url": "https://github.com/toshi0806/ai-academic-paper-reviewer/issues"
+  },
+  "homepage": "https://github.com/toshi0806/ai-academic-paper-reviewer#readme",
   "devDependencies": {
     "@types/diff": "^6.0.0",
     "@types/node": "^22.10.2",
@@ -23,6 +31,7 @@
     "ai": "^4.0.22",
     "diff": "^7.0.0",
     "dotenv": "^16.4.7",
-    "minimatch": "^10.0.1"
+    "minimatch": "^10.0.1",
+    "zod": "^3.23.8"
   }
 }
